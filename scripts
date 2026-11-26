@@ -1,0 +1,19 @@
+import fs from "fs";
+import path from "path";
+
+const API_KEY = process.env.NEWS_API_KEY;
+
+if (!API_KEY) {
+  console.error("Error: NEWS_API_KEY is missing.");
+  process.exit(1);
+}
+
+// يمكنك تعديل الكلمات المفتاحية أو رابط المزود حسب خدمة الأخبار لديك
+const query = encodeURIComponent("programming OR software OR artificial intelligence");
+const url = `https://gnews.io/api/v4/search?q=${query}&lang=en&max=8&apikey=${API_KEY}`;
+
+async function run() {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch news. Status: ${response.status}`); }  const data = await response.json();  const formattedNews = { updatedAt: new Date().toISOString(), total: (data.articles \vert{}\vert{} []).length, articles: (data.articles \vert{}\vert{} []).map((article, index) => ({ id: index + 1, title: article.title \vert{}\vert{} "", description: article.description \vert{}\vert{} "", url: article.url \vert{}\vert{} "", source: article.source?.name \vert{}\vert{} "Unknown", publishedAt: article.publishedAt \vert{}\vert{} "", })), };  const outputPath = path.join(process.cwd(), "data", "daily-news.json"); fs.mkdirSync(path.dirname(outputPath), { recursive: true }); fs.writeFileSync(outputPath, JSON.stringify(formattedNews, null, 2), "utf-8");  console.log(`Saved ${formattedNews.articles.length} daily news articles to data/daily-news
