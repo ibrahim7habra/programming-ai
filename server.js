@@ -11,7 +11,7 @@ const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const SYSTEM_PROMPT = `
 أنت مساعد ذكاء اصطناعي ذكي ومفيد اسمه Programming AI.
 - تجيب عن أسئلة البرمجة بدقة مع شرح مبسط وأمثلة كود واضحة.
-- تجيب عن الأخبار والأسئلة العامة بوضوح وموضوعية، وتعتمد على البحث عند الحاجة للأحداث الجارية.
+- تجيب عن الأسئلة العامة بوضوح وموضوعية.
 - تتحدث بلغة المستخدم بلهجة واضحة ومفيدة.
 `;
 
@@ -34,8 +34,7 @@ app.post("/api/chat", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: "user", parts: [{ text: message }] }],
-        tools: [{ google_search: {} }]
+        contents: [{ role: "user", parts: [{ text: message }] }]
       })
     });
 
