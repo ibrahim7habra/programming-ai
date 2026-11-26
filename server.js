@@ -6,7 +6,11 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const MODELS = [
+  process.env.GEMINI_MODEL || "gemini-3.8-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash"
+];
 
 const SYSTEM_PROMPT = `
 أنت مساعد ذكاء اصطناعي ذكي ومفيد اسمه Programming AI.
@@ -14,6 +18,20 @@ const SYSTEM_PROMPT = `
 - تجيب عن الأسئلة العامة بوضوح وموضوعية.
 - تتحدث بلغة المستخدم بلهجة واضحة ومفيدة.
 `;
+
+async function callGemini(model, apiKey, message) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [{ role: "user", parts: [{ text: String(message).trim() }] }]
+    })
+  });
+  const data = await response.json();
+  return { response, data };
+}
 
 app.post("/api/chat", async (req, res) => {
   try {
@@ -27,29 +45,32 @@ app.post("/api/chat", async (req, res) => {
       return res.status(500).json({ reply: "مفتاح GEMINI_API_KEY غير مضبوط على السيرفر." });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+    let lastError = "حدث خطأ من خدمة Gemini API.";
+    let lastStatus = 500;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: "user", parts: [{ text: String(message).trim() }] }]
-      })
-    });
+    for (const model of MODELS) {
+      const { response, data } = await callGemini(model, apiKey, message);
 
-    const data = await response.json();
+      if (response.ok) {
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        const reply = parts.map((p) => p.text || "").join("").trim() || "لم أتمكن من إنشاء رد.";
+        return res.json({ reply });
+      }
 
-    if (!response.ok) {
-      return res.status(response.status).json({
-        reply: data?.error?.message || "حدث خطأ من خدمة Gemini API."
-      });
+      lastStatus = response.status;
+      lastError = data?.error?.message || lastError;
+
+      const isOverloaded =
+        response.status === 503 ||
+        response.status === 429 ||
+        /high demand|overloaded|unavailable/i.test(lastError);
+
+      if (!isOverloaded) {
+        break;
+      }
     }
 
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const reply = parts.map((p) => p.text || "").join("").trim() || "لم أتمكن من إنشاء رد.";
-
-    return res.json({ reply });
+    return res.status(lastStatus).json({ reply: lastError });
   } catch (error) {
     return res.status(500).json({ reply: `خطأ في السيرفر: ${error.message || "تعذر الاتصال"}` });
   }
