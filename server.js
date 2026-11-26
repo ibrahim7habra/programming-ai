@@ -8,8 +8,7 @@ app.use(express.static("public"));
 
 const MODELS = [
   process.env.GEMINI_MODEL || "gemini-3.8-flash",
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-flash"
+  "gemini-3.5-flash-lite"
 ];
 
 const SYSTEM_PROMPT = `
@@ -60,12 +59,13 @@ app.post("/api/chat", async (req, res) => {
       lastStatus = response.status;
       lastError = data?.error?.message || lastError;
 
-      const isOverloaded =
+      const shouldFallback =
         response.status === 503 ||
         response.status === 429 ||
-        /high demand|overloaded|unavailable/i.test(lastError);
+        response.status === 404 ||
+        /high demand|overloaded|unavailable|no longer available/i.test(lastError);
 
-      if (!isOverloaded) {
+      if (!shouldFallback) {
         break;
       }
     }
