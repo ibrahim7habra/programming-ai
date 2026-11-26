@@ -6,7 +6,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-4-hydrogen";
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `
 أنت مساعد ذكاء اصطناعي ذكي ومفيد اسمه Programming AI.
