@@ -17,8 +17,8 @@ const SYSTEM_PROMPT = `
 
 app.post("/api/chat", async (req, res) => {
   try {
-    const { message } = req.body;
-    if (!message || !message.trim()) {
+    const { message } = req.body || {};
+    if (!message || !String(message).trim()) {
       return res.status(400).json({ reply: "من فضلك اكتب سؤالك أولاً." });
     }
 
@@ -34,7 +34,7 @@ app.post("/api/chat", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: "user", parts: [{ text: message }] }]
+        contents: [{ role: "user", parts: [{ text: String(message).trim() }] }]
       })
     });
 
@@ -49,13 +49,17 @@ app.post("/api/chat", async (req, res) => {
     const parts = data?.candidates?.[0]?.content?.parts || [];
     const reply = parts.map((p) => p.text || "").join("").trim() || "لم أتمكن من إنشاء رد.";
 
-    res.json({ reply });
+    return res.json({ reply });
   } catch (error) {
-    res.status(500).json({ reply: "حصلت مشكلة في الاتصال بالسيرفر." });
+    return res.status(500).json({ reply: `خطأ في السيرفر: ${error.message || "تعذر الاتصال"}` });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Programming AI running on port ${PORT}`);
-});
+if (!process.env.VERCEL) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Programming AI running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
