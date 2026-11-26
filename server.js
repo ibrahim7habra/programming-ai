@@ -1,86 +1,145 @@
-const express = require("express");
-const cors = require("cors");
+import express from "express";
+import fs from "fs";
+import path from "path";
 
 const app = express();
-app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
 
-const MODELS = [
-  process.env.GEMINI_MODEL || "gemini-3.8-flash",
-  "gemini-3.5-flash-lite"
-];
+// خدمة ملفات الواجهة الأمامية من مجلد public إن وجدت
+app.use(express.static(path.join(process.cwd(), "public")));
 
-const SYSTEM_PROMPT = `
-أنت مساعد ذكاء اصطناعي ذكي ومفيد اسمه Programming AI.
-- تجيب عن أسئلة البرمجة بدقة مع شرح مبسط وأمثلة كود واضحة.
-- تجيب عن الأسئلة العامة بوضوح وموضوعية.
-- تتحدث بلغة المستخدم بلهجة واضحة ومفيدة.
-`;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const NEWS_API_KEY = process.env.NEWS_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-async function callGemini(model, apiKey, message) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const response = await fetch(url, {
+// تحديد وضع السؤال: أخبار يومية أم تعلم ذكاء اصطناعي وبرمجة
+function detectMode(message = "") {
+  const isNews = /(أخبار|خبر|النهاردة|اليوم|جديد|تحديثات|اخبار|news|latest|today)/i.test(message);
+  if (isNews) return "news";
+
+  const isAI = /(ذكاء اصطناعي|تعلم الآلة|تعلم الالة|machine learning|deep learning|neural|llm|prompt|ai\b|نموذج)/i.test(message);
+  if (isAI) return "ai";
+
+  return "programming";
+}
+
+function getSystemPrompt(mode) {
+  if (mode === "news") {
+    return `أنت مساعد ذكي متخصص في متابعة الأخبار اليومية وتأثيرها على البرمجة والذكاء الاصطناعي.
+- لخّص الأخبار المتاحة باللغة العربية بوضوح واختصار منظم.
+- وضّح أهمية كل خبر للمطورين أو لمجال الذكاء الاصطناعي.
+- لا تخترع أخباراً غير موجودة في البيانات المرفقة، وإذا لم تتوفر أخبار فوضّح ذلك بوضوح.`;
+  }
+
+  if (mode === "ai") {
+    return `أنت مدرّب ومساعد متخصص في تعلم الذكاء الاصطناعي (AI & Machine Learning).
+- اشرح المفاهيم خطوة بخطوة بأسلوب مبسط وعملي مع أمثلة واضحة.
+- اربط الشرح بالتطبيق العملي وكيفية بناء الأنظمة والنماذج.
+- اختم بنصيحة أو خطوة عملية تالية لتعميق الفهم.`;
+  }
+
+  return `أنت مساعد برمجة ذكي (Programming AI).
+- اشرح الأكواد والمفاهيم البرمجية بوضوح ومنطق عملي.
+- قدّم حلولاً دقيقة وأمثلة كود نظيفة عند الحاجة، وساعد في اكتشاف الأخطاء وتحسين الأداء.`;
+}
+
+async function getDailyNewsContext() {
+  // 1. قراءة ملف الأخبار المحدّث عبر GitHub Actions إن وُجد
+  try {
+    const filePath = path.join(process.cwd(), "data", "daily-news.json");
+    if (fs.existsSync(filePath)) {
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (Array.isArray(raw.articles) && raw.articles.length > 0) {
+        return raw.articles
+          .slice(0, 6)
+          .map(
+            (a, i) =>
+              `${i + 1}. ${a.title} (${a.source || "مصدر"}) - ${a.description || ""}`
+          )
+          .join("\n");
+      }
+    }
+  } catch (err) {
+    console.warn("Warning reading data/daily-news.json:", err.message);
+  }
+
+  // 2. جلب الأخبار مباشرة من News API باستخدام NEWS_API_KEY
+  if (!NEWS_API_KEY) {
+    return "لا توجد أخبار محلية متاحة ولم يتم ضبط NEWS_API_KEY بعد.";
+  }
+
+  const query = encodeURIComponent("programming OR software OR artificial intelligence");
+  const url = `https://gnews.io/api/v4/search?q=${query}&lang=en&max=6&apikey=${NEWS_API_KEY}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`News API returned status ${res.status}`);
+  }
+
+  const data = await res.json();
+  const articles = data.articles || [];
+
+  if (articles.length === 0) {
+    return "لم يتم العثور على أخبار جديدة حالياً.";
+  }
+
+  return articles
+    .map(
+      (a, i) =>
+        `${i + 1}. ${a.title} (${a.source?.name || "Source"}) - ${a.description || ""}`
+    )
+    .join("\n");
+}
+
+async function askGemini({ systemInstruction, prompt, history = [] }) {
+  if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is missing in environment variables.");
+  }
+
+  const contents = [];
+
+  // إضافة سجل المحادثة السابق إن وُجد
+  for (const item of history) {
+    if (!item?.content) continue;
+    contents.push({
+      role: item.role === "assistant" ? "model" : "user",
+      parts: [{ text: String(item.content) }],
+    });
+  }
+
+  // إضافة الرسالة الحالية
+  contents.push({
+    role: "user",
+    parts: [{ text: prompt }],
+  });
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [{ role: "user", parts: [{ text: String(message).trim() }] }]
-    })
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      contents,
+    }),
   });
-  const data = await response.json();
-  return { response, data };
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Gemini API error (${response.status}): ${errText}`);
+  }
+
+  const result = await response.json();
+  return (
+    result?.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || "")
+      .join("")
+      .trim() || "لم أتمكن من توليد رد حالياً."
+  );
 }
 
+// مسار الدردشة الرئيسي
 app.post("/api/chat", async (req, res) => {
   try {
-    const { message } = req.body || {};
-    if (!message || !String(message).trim()) {
-      return res.status(400).json({ reply: "من فضلك اكتب سؤالك أولاً." });
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ reply: "مفتاح GEMINI_API_KEY غير مضبوط على السيرفر." });
-    }
-
-    let lastError = "حدث خطأ من خدمة Gemini API.";
-    let lastStatus = 500;
-
-    for (const model of MODELS) {
-      const { response, data } = await callGemini(model, apiKey, message);
-
-      if (response.ok) {
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        const reply = parts.map((p) => p.text || "").join("").trim() || "لم أتمكن من إنشاء رد.";
-        return res.json({ reply });
-      }
-
-      lastStatus = response.status;
-      lastError = data?.error?.message || lastError;
-
-      const shouldFallback =
-        response.status === 503 ||
-        response.status === 429 ||
-        response.status === 404 ||
-        /high demand|overloaded|unavailable|no longer available/i.test(lastError);
-
-      if (!shouldFallback) {
-        break;
-      }
-    }
-
-    return res.status(lastStatus).json({ reply: lastError });
-  } catch (error) {
-    return res.status(500).json({ reply: `خطأ في السيرفر: ${error.message || "تعذر الاتصال"}` });
-  }
-});
-
-if (!process.env.VERCEL) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`Programming AI running on port ${PORT}`);
-  });
-}
-
-module.exports = app;
